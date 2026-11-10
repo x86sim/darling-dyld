@@ -101,7 +101,7 @@
 	};
 	extern "C" int amfi_check_dyld_policy_self(uint64_t input_flags, uint64_t* output_flags);
 #ifdef DARLING
-    // x86Code: 0x40 (ALLOW_LIBRARY_INTERPOSING) too; newer dyld_sim drops __interpose tuples without it
+    // x86Sim: 0x40 (ALLOW_LIBRARY_INTERPOSING) too; newer dyld_sim drops __interpose tuples without it
     int amfi_check_dyld_policy_self(uint64_t input_flags, uint64_t* output_flags) { *output_flags = 0x7F; return 0; }
 #endif
 #else
