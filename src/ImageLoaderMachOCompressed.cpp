@@ -471,7 +471,7 @@ void ImageLoaderMachOCompressed::rebase(const LinkContext& context, uintptr_t sl
 	CRSetCrashLogMessage2(NULL);
 }
 
-const ImageLoader::Symbol* ImageLoaderMachOCompressed::findShallowExportedSymbol(const char* symbol, const ImageLoader** foundIn) const
+const ImageLoader::Symbol* ImageLoaderMachOCompressed::findShallowExportedSymbol(const char* symbol, const ImageLoader** foundIn, const ExportLookup* parent) const
 {
 	//dyld::log("Compressed::findExportedSymbol(%s) in %s\n", symbol, this->getShortName());
 	uint32_t trieFileOffset = fDyldInfo ? fDyldInfo->export_off  : fExportsTrie->dataoff;
@@ -502,7 +502,7 @@ const ImageLoader::Symbol* ImageLoaderMachOCompressed::findShallowExportedSymbol
 					return NULL;
 				//dyld::log("Compressed::findExportedSymbol(), %s -> %s/%s\n", symbol, reexportedFrom->getShortName(), importedName);
 				const char* reExportLibPath = libPath((unsigned int)ordinal-1);
-				return reexportedFrom->findExportedSymbol(importedName, true, reExportLibPath, foundIn);
+				return reexportedFrom->findExportedSymbol(importedName, true, reExportLibPath, foundIn, parent);
 			}
 			else {
 				//dyld::throwf("bad mach-o binary, library ordinal (%u) invalid (max %u) for re-exported symbol %s in %s",
@@ -1209,7 +1209,7 @@ struct ThreadedBindData {
     uint8_t type               = 0;
 };
 
-void ImageLoaderMachOCompressed::makeDataReadOnly() const
+void ImageLoaderMachOCompressed::setReadOnlyDataWritable(bool writable) const
 {
 #if !TEXT_RELOC_SUPPORT
 	if ( fReadOnlyDataSegment && !this->ImageLoader::inSharedCache() ) {
@@ -1224,7 +1224,7 @@ void ImageLoaderMachOCompressed::makeDataReadOnly() const
 						continue;
 				}
 	#endif
-				::mprotect((void*)start, size, PROT_READ);
+				::mprotect((void*)start, size, writable ? (PROT_READ | PROT_WRITE) : PROT_READ);
 				//dyld::log("make read-only 0x%09lX -> 0x%09lX\n", (long)start, (long)(start+size));
 			}
 		}
@@ -2150,6 +2150,4 @@ void ImageLoaderMachOCompressed::registerEncryption(const encryption_info_comman
 	}
 #endif
 }
-
-
 

@@ -462,7 +462,13 @@ public:
 																bool runResolver, const ImageLoader** foundIn, uintptr_t* address) const;
 
 										// search symbol table of definitions in this image for requested name
-	virtual const Symbol*				findExportedSymbol(const char* name, bool searchReExports, const char* thisPath, const ImageLoader** foundIn) const = 0;
+	struct ExportLookup {
+		const ImageLoader* image;
+		const char* name;
+		const ExportLookup* parent;
+		bool searchReExports;
+	};
+	virtual const Symbol*				findExportedSymbol(const char* name, bool searchReExports, const char* thisPath, const ImageLoader** foundIn, const ExportLookup* parent = nullptr) const = 0;
 	
 										// search symbol table of definitions in this image for requested name
 	virtual const Symbol*				findExportedSymbol(const char* name, bool searchReExports, const ImageLoader** foundIn) const {
@@ -611,7 +617,7 @@ public:
 
 	virtual bool						usesChainedFixups() const { return false; }
 
-	virtual void						makeDataReadOnly() const {}
+	virtual void						setReadOnlyDataWritable(bool) const {}
 	
 										// when resolving symbols look in subImage if symbol can't be found
 	void								reExport(ImageLoader* subImage);
@@ -696,6 +702,7 @@ public:
 	
 			void						setObjCMappedNotified() { fObjCMappedNotified = true; }
 			bool						objCMappedNotified() const { return fObjCMappedNotified; }
+			bool						madeDataReadOnly() const { return fMadeReadOnly; }
 
 	struct InterposeTuple { 
 		uintptr_t										replacement;
@@ -913,4 +920,3 @@ VECTOR_NEVER_DESTRUCTED_EXTERN(ImageLoader::InterposeTuple);
 
 
 #endif
-

@@ -47,6 +47,12 @@
 #include <stdint.h>
 #include <System/sys/codesign.h>
 
+#ifdef DARLING
+extern "C" {
+#include <darling/emulation/common/dc_mseal.h>
+}
+#endif
+
 #if __has_feature(ptrauth_calls)
 #include <ptrauth.h>
 #endif
@@ -58,6 +64,9 @@
 #endif
 #include "Tracing.h"
 #include "dyld2.h"
+#if defined(DARLING) && (defined(__aarch64__) || defined(__arm64__))
+#include "DarlingDylibArena.h"
+#endif
 
 // <rdar://problem/8718137> use stack guard random value to add padding between dylibs
 extern "C" long __stack_chk_guard;
@@ -1674,10 +1683,18 @@ void ImageLoaderMachO::makeTextSegmentWritable(const LinkContext& context, bool 
 }
 #endif
 
-const ImageLoader::Symbol* ImageLoaderMachO::findExportedSymbol(const char* name, bool searchReExports, const char* thisPath, const ImageLoader** foundIn) const
+const ImageLoader::Symbol* ImageLoaderMachO::findExportedSymbol(const char* name, bool searchReExports, const char* thisPath, const ImageLoader** foundIn, const ExportLookup* parent) const
 {
+	// Track this lookup's ancestry, not global/thread ownership. Include the
+	// symbol name because re-export trie entries may rename the requested symbol.
+	for (const ExportLookup* p = parent; p != nullptr; p = p->parent) {
+		if ( p->image == this && p->searchReExports == searchReExports
+		  && strcmp(p->name, name) == 0 )
+			return NULL;
+	}
+	const ExportLookup lookup = { this, name, parent, searchReExports };
 	// look in this image first
-	const ImageLoader::Symbol* result = this->findShallowExportedSymbol(name, foundIn);
+	const ImageLoader::Symbol* result = this->findShallowExportedSymbol(name, foundIn, &lookup);
 	if ( result != NULL )
 		return result;
 	
@@ -1687,7 +1704,7 @@ const ImageLoader::Symbol* ImageLoaderMachO::findExportedSymbol(const char* name
 				ImageLoader* image = libImage(i);
 				if ( image != NULL ) {
 					const char* reExPath = libPath(i);
-					result = image->findExportedSymbol(name, searchReExports, reExPath, foundIn);
+					result = image->findExportedSymbol(name, searchReExports, reExPath, foundIn, &lookup);
 					if ( result != NULL )
 						return result;
 				}
@@ -2594,13 +2611,13 @@ uintptr_t ImageLoaderMachO::reserveAnAddressRange(size_t length, const ImageLoad
 	 * above 2^47 collides with ObjC's FAST_DATA_MASK (47 bits) and crashes
 	 * class_initialize. Sequentially hand out low-VA slots so all dylibs
 	 * remain within the addressable range. */
-	static uintptr_t fgDarlingNextDylibAddr = 0x300000000ULL; /* leave 0x100/0x200 ranges for exe + dyld */
-	addr = fgDarlingNextDylibAddr;
-	kern_return_t r = vm_alloc(&addr, size, VM_FLAGS_FIXED | VM_MAKE_TAG(VM_MEMORY_DYLIB));
-	if ( r == KERN_SUCCESS ) {
-		fgDarlingNextDylibAddr = addr + size + 0x100000; /* leave a 1 MiB gap */
+	static uintptr_t fgDarlingNextDylibAddr = DARLING_DYLIB_ARENA_BASE;
+	addr = darling_dylib_arena_claim(&fgDarlingNextDylibAddr, size, [](uintptr_t slot, size_t slotSize) -> int {
+		vm_address_t fixedAddr = slot;
+		return vm_alloc(&fixedAddr, slotSize, VM_FLAGS_FIXED | VM_MAKE_TAG(VM_MEMORY_DYLIB)) == KERN_SUCCESS;
+	});
+	if ( addr != 0 )
 		return addr;
-	}
 	/* fall back to ANYWHERE — at least the system might still be usable */
 	addr = 0;
 #endif
@@ -2739,7 +2756,44 @@ void ImageLoaderMachO::mapSegments(int fd, uint64_t offsetInFat, uint64_t lenInF
 
 	// update slide to reflect load location			
 	this->setSlide(slide);
+
+#ifdef DARLING
+	if ( dyld::darlingSealImages() )
+		this->darlingSealSegments();
+#endif
 }
+
+#ifdef DARLING
+// Darling's SealImages setting: make the read-only code and __LINKEDIT of the
+// image immutable, so they can no longer be remapped, made writable or
+// unmapped. Segments that dyld itself still has to modify (text relocations)
+// are left alone.
+void ImageLoaderMachO::darlingSealSegments()
+{
+	static bool sSealingUnsupported = false;
+
+	for (unsigned int i = 0, e = segmentCount(); i < e && !sSealingUnsupported; ++i) {
+		if ( segUnaccessible(i) || segWriteable(i) || (segFileSize(i) == 0) )
+			continue;
+		if ( (strcmp(segName(i), "__TEXT") != 0) && (strcmp(segName(i), "__LINKEDIT") != 0) )
+			continue;
+		if ( segExecutable(i) && (segHasRebaseFixUps(i) || segHasBindFixUps(i)) )
+			continue;
+
+		// only the part that is mapped from the file
+		const int protection = PROT_READ | (segExecutable(i) ? PROT_EXEC : 0);
+		const int result = __darling_mseal_range((void*)segActualLoadAddress(i), dyld_page_round(segFileSize(i)), protection);
+		if ( result == -ENOSYS ) {
+			// the host kernel cannot seal memory (Linux before 6.10)
+			dyld::warn("cannot seal images: the host kernel does not support mseal()\n");
+			sSealingUnsupported = true;
+		}
+		else if ( result < 0 ) {
+			dyld::warn("cannot seal %s in %s: errno=%d\n", segName(i), getPath(), -result);
+		}
+	}
+}
+#endif
 
 void ImageLoaderMachO::mapSegments(const void* memoryImage, uint64_t imageLen, const LinkContext& context)
 {
@@ -3033,4 +3087,3 @@ uintptr_t ImageLoaderMachO::imageBaseAddress() const {
     }
     return 0;
 }
-

@@ -19,6 +19,8 @@ add_definitions(-DHAVE_STDINT_H=1)
 
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/launch-cache)
 include_directories(${CMAKE_CURRENT_SOURCE_DIR})
+# dserver_system_config_t, for the code signing configuration
+include_directories(${CMAKE_SOURCE_DIR}/src/external/darlingserver/include)
 include_directories(BEFORE ${CMAKE_CURRENT_SOURCE_DIR}/include
 	${CMAKE_CURRENT_SOURCE_DIR}/include/mach-o
 	${CMAKE_CURRENT_SOURCE_DIR}/dyld3/shared-cache
@@ -38,6 +40,7 @@ add_circular(system_dyld FAT
 	src/dyld_process_info.cpp
 	src/dyld_process_info_notify.cpp
 	src/start_glue.S
+	darling/src/macho_utils.c
 	dyld3/AllImages.cpp
 	dyld3/APIs.cpp
 	dyld3/APIs_macOS.cpp
@@ -169,3 +172,7 @@ install(FILES
 	libexec/darling/usr/share/man/man3
 )
 
+
+# Host-side unit tests, run with ctest; they need no Darling build.
+enable_testing()
+add_test(NAME dyld_host_tests COMMAND sh ${CMAKE_CURRENT_SOURCE_DIR}/darling/tests/run-host-tests.sh)
